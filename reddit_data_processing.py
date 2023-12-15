@@ -22,76 +22,7 @@ time.
 """
 
 from typing import Union
-
-
-def does_var_exists_gz(var_name: str) -> bool:
-    return os.path.isfile(F'./data/{var_name}.pkl.gz')
-
-
-def dump_var_gz(var_name: str, obj) -> None:
-    os.makedirs("./data", exist_ok=True)
-    with gzip.open(F'./data/{var_name}.pkl.gz', 'wb', compresslevel=1) as file:
-        pickle.dump(obj, file)
-
-
-def load_var_gz(var_name: str) -> Union[None, object]:
-    if not does_var_exists(var_name):
-        return None
-
-    file_path = F'./data/{var_name}.pkl.gz'  # Updated file extension
-    with gzip.open(file_path, 'rb', compresslevel=1) as file:
-        return pickle.load(file)
-
-
-def does_var_exists(var_name: str) -> bool:
-    return os.path.isfile(F'./data/{var_name}.pkl')
-
-
-def dump_var(var_name: str, obj) -> None:
-    os.makedirs("./data", exist_ok=True)
-    with open(F'./data/{var_name}.pkl', 'wb') as file:
-        pickle.dump(obj, file)
-
-
-def load_var(var_name: str) -> Union[None, object]:
-    if not does_var_exists(var_name):
-        return None
-    with open(F'./data/{var_name}.pkl', 'rb') as file:
-        return pickle.load(file)
-
-
-def read_and_decode(reader, chunk_size, max_window_size, previous_chunk=None, bytes_read=0):
-    chunk = reader.read(chunk_size)
-    bytes_read += chunk_size
-    if previous_chunk is not None:
-        chunk = previous_chunk + chunk
-    try:
-        return chunk.decode()
-    except UnicodeDecodeError:
-        if bytes_read > max_window_size:
-            raise UnicodeError(f"Unable to decode frame after reading {bytes_read:,} bytes")
-        log.info(f"Decoding error with {bytes_read:,} bytes, reading another chunk")
-        return read_and_decode(reader, chunk_size, max_window_size, chunk, bytes_read)
-
-
-def read_lines_zst(file_name):
-    with open(file_name, 'rb') as file_handle:
-        buffer = ''
-        reader = zstandard.ZstdDecompressor(max_window_size=2 ** 31).stream_reader(file_handle)
-        while True:
-            chunk = read_and_decode(reader, 2 ** 27, (2 ** 29) * 2)
-
-            if not chunk:
-                break
-            lines = (buffer + chunk).split("\n")
-
-            for line in lines[:-1]:
-                yield line, file_handle.tell()
-
-            buffer = lines[-1]
-
-        reader.close()
-
+from data_processing_util import load_var_gz, read_lines_zst, dump_var_gz, does_var_exists_gz, read_and_decode
 
 def process_files(file_paths: List, author_to_lines: Dict[str, List[Tuple[int, str]]] = None):
     """
@@ -315,18 +246,18 @@ def analyze_data(author_to_lines: Dict[str, List[Tuple[int, str]]]):
 def main():
     log.info("Starting...")
 
-    #base_path = "D:\\reddit\\comments"
-    #target_files = [f"{base_path}\\RC_{sample_month_year[1]}-{sample_month_year[0]}.zst" for sample_month_year in
-    #                sample_month_years]
-    #author_to_lines = process_files(target_files)
+    base_path = "/projectnb/cs505ws/projects/NextType/raw_reddit_data"
+    target_files = [f"{base_path}/RC_{sample_month_year[1]}-{sample_month_year[0]}.zst" for sample_month_year in
+                    sample_month_years]
+    author_to_lines = process_files(target_files)
 
-    #author_to_lines = remove_authors_small_sample(author_to_lines)
-    #author_to_lines = remove_irregular_authors_monthly(author_to_lines)
-    #author_to_lines = remove_irregular_authors_weekly(author_to_lines)
-    #author_to_lines = remove_irregular_authors_daily(author_to_lines)
+    author_to_lines = remove_authors_small_sample(author_to_lines)
+    author_to_lines = remove_irregular_authors_monthly(author_to_lines)
+    author_to_lines = remove_irregular_authors_weekly(author_to_lines)
+    author_to_lines = remove_irregular_authors_daily(author_to_lines)
 
-    #dump_var_gz("author_to_lines", author_to_lines)
-    author_to_lines = load_var("author_to_lines")
+    dump_var_gz("author_to_lines", author_to_lines)
+    author_to_lines = load_var_gz("author_to_lines")
     analyze_data(author_to_lines)
 
 
