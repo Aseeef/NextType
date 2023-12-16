@@ -1,8 +1,11 @@
+import base64
 import concurrent.futures
+import gzip
 import json
 import logging
 import multiprocessing
 import os
+import pickle
 import re
 from collections import Counter
 from concurrent.futures import Future, as_completed
@@ -23,6 +26,10 @@ time.
 """
 
 import html
+
+processed_data_dir = "/projectnb/cs505ws/projects/NextType/data/"
+reddit_data_dir = "/projectnb/cs505ws/projects/NextType/raw_reddit_data/"
+
 # Precompile regular expressions
 new_line_regex = re.compile("\n")
 html_chars_regex = re.compile(r"&[a-zA-Z]+;")
@@ -35,6 +42,7 @@ double_spaces_regex = re.compile(" {2,}")
 urls_regex = re.compile(
     r"https?://(www\.)?[-a-zA-Z0-9@:%._+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b([-a-zA-Z0-9()@:%_+.~#?&/=]*)")
 subreddit_regex = re.compile(r"(\W)(r/[a-z0-9A-Z_]{2,10})(\W)|(\W)(/[a-z0-9A-Z_]{2,10})(\W)")
+
 
 def normalize_text(post_text: str):
     # Apply regular expressions
@@ -52,15 +60,15 @@ def normalize_text(post_text: str):
     post_text = post_text.strip()
     return post_text
 
-def add_data_to_freq_dict(current_freq_dist, new_data, n):
-    # Tokenize and flatten the corpus
-    tokens = [word for sent in nltk.sent_tokenize(new_data) for word in nltk.word_tokenize(sent)]
+
+def add_data_to_freq_dict(current_freq_dist, tokenized_reddit_post, n):
     # Generate n-grams
-    ngrams_list = list(ngrams(tokens, n))
+    ngrams_list = list(ngrams(tokenized_reddit_post, n))
     new_freq_dist = FreqDist(ngrams_list)
     for new_elem in new_freq_dist:
         current_freq_dist[new_elem] += new_freq_dist[new_elem]
     return current_freq_dist
+
 
 def create_ngram_distribution(current_freq_dist):
     total_ngrams = 0
@@ -71,59 +79,82 @@ def create_ngram_distribution(current_freq_dist):
     return ngram_probabilities
 
 
-def preprocess_files(file_paths: List):
-    """
-    :param file_paths:
-    :param author_to_lines: key: str representing author name
-                            value: tuple with the epoch integer timestamp of the msg (utc) and str msg
-    :return:
-    """
+def preprocess_file(file_path):
 
-    for file_path in file_paths:
+    def tokenize_post(pre_tokenized_post_data):
+        return [word for sent in nltk.sent_tokenize(pre_tokenized_post_data) for word in nltk.word_tokenize(sent)]
+
+    try:
         file_lines = 0
         file_size = os.stat(file_path).st_size
         file_bytes_processed = 0
         created = None
         bad_lines = 0
-        post_lines = []
-        print(f'Starting pre-processing {file_path}')
+
+        dump_name = file_path.replace(reddit_data_dir, '')
+        dump_name = dump_name.replace('.zst', '')
+        print(f'Starting pre-processing of {dump_name}')
 
         # try:
-        for line, file_bytes_processed in read_lines_zst(file_path):
-            try:
-                obj = json.loads(line)
-                created = datetime.utcfromtimestamp(int(obj['created_utc']))
-                post_data = obj["body"]
-                post_data = normalize_text(post_data)
-                post_data = post_data.lower()
-                post_lines += [post_data]
+        with gzip.open(processed_data_dir + dump_name + ".gz", 'wt', encoding='utf-8', compresslevel=3) as f:
+            for line, file_bytes_processed in read_lines_zst(file_path):
+                try:
+                    obj = json.loads(line)
+                    created = datetime.utcfromtimestamp(int(obj['created_utc']))
+                    post_data = obj["body"]
+                    post_data = normalize_text(post_data)
+                    post_data = post_data.lower()
+                    tokenized_post = tokenize_post(post_data)
+                    serialized_bytes = pickle.dumps(tokenized_post)
+                    serialized_string = base64.b64encode(serialized_bytes).decode('utf-8')
+                    f.write(serialized_string + '\n')
 
-            except (KeyError, json.JSONDecodeError) as err:
-                bad_lines += 1
+                except Exception as err:
+                    bad_lines += 1
+                    print(err)
 
-            file_lines += 1
-            if file_lines % 10000 == 0:
-                log.info(
-                    f"[Pre-processing] "
-                    f"{created.strftime('%Y-%m-%d %H:%M:%S')} : {file_lines:,} : {bad_lines:,} : "
-                    f"{file_bytes_processed:,} : {(file_bytes_processed / file_size) * 100:.0f}%")
+                file_lines += 1
+                if file_lines % 50000 == 0:
+                    log.info(
+                        f"[Pre-processing] [{dump_name}] "
+                        f"{created.strftime('%Y-%m-%d %H:%M:%S')} : {file_lines:,} : {bad_lines:,} : "
+                        f"{file_bytes_processed:,} : {(file_bytes_processed / file_size) * 100:.0f}%")
 
         print(f"Finished processing {file_path}.")
         os.remove(file_path)
-        dump_name = file_path.replace('/projectnb/cs505ws/projects/NextType/raw_reddit_data/', '')
-        dump_name = dump_name.replace('.zst', '')
-        dump_var_gz(dump_name, post_lines)
+    except Exception as e:
+        print(e)
+
+    return file_path
+
+def preprocess_files(file_paths: List):
+    """
+    Preprocesses the raw reddit data into normalized tokens that can easily be converted into ngrams
+    """
+
+    print('Spawning workers...')
+    with concurrent.futures.ProcessPoolExecutor(max_workers=18) as executors:
+        futures = []
+        for file_path in file_paths:
+            print('Submit task for file path', file_path)
+            future = executors.submit(preprocess_file, file_path)
+            futures.append(future)
+        concurrent.futures.wait(futures)
+        for result in concurrent.futures.as_completed(futures):
+            try:
+                print(f"{result.result()} completed preprocessing!")
+            except Exception as e:
+                print(e)
 
 
-def process_file(dump_name, current_freq_dist):
-    iter_num = 0
-    post_lines = load_var_gz(dump_name)
-    for post_data in tqdm(post_lines, desc=dump_name):
-        current_freq_dist = add_data_to_freq_dict(current_freq_dist, post_data, n=3)
-        iter_num += 1
-        if iter_num % 100000 == 0:
-            print(f'{dump_name} - Current n-gram size:', len(current_freq_dist))
-    return current_freq_dist
+
+def delete_rare_ngrams(rarity, current_freq_dist):
+        print(f'Filtering ngrams - current size={len(current_freq_dist)}')
+        # filter to only include n-grams that appeared at least 2 times
+        filtered_counter = Counter({key: value for key, value in current_freq_dist.items() if value >= rarity})
+        print(f'Filtering ngrams - new size={len(filtered_counter)}')
+        return filtered_counter
+        
 
 def process_files(file_paths: List):
     """
@@ -132,50 +163,60 @@ def process_files(file_paths: List):
                             value: tuple with the epoch integer timestamp of the msg (utc) and str msg
     :return:
     """
-    current_freq_dist = Counter()
-    with concurrent.futures.ProcessPoolExecutor(max_workers=6) as executor:
-        futures: List[Future] = []
-        # process 6 at a time
-        for sublist_files in [file_paths[0:6], file_paths[6:12], file_paths[12:18]]:
-            for file_path in sublist_files:
-                dump_name = file_path.replace('/projectnb/cs505ws/projects/NextType/raw_reddit_data/', '')
-                dump_name = dump_name.replace('.zst', '')
-                print(f'Submitting task for post-processing dump {dump_name}')
-                future = executor.submit(process_file, dump_name, Counter())
-                futures.append(future)
 
-            for future in as_completed(futures):
-                compiled_counter = future.result()
-                for val in compiled_counter:
-                    current_freq_dist[val] += compiled_counter[val]
-                print('A future was just completed! Combined n-gram size:', len(current_freq_dist))
+    current_freq_dist = Counter()
+
+    for file_path in file_paths:
+        dump_name = file_path.replace(reddit_data_dir, '')
+        dump_name = dump_name.replace('.zst', '')
+        print(f'Starting dump {dump_name}')
+
+        line_count = 0
+        # Open the file in read mode
+        with gzip.open(processed_data_dir + dump_name + ".gz", 'rt', encoding='utf-8', compresslevel=3) as file:
+            # Iterate through the file line by line
+            for line in file:
+                line_count += 1
+
+        with gzip.open(processed_data_dir + dump_name + ".gz", 'rt', encoding='utf-8', compresslevel=3) as f:
+            iter_num = 0
+            for i in tqdm(range(line_count), desc=dump_name):
+                picked_data = f.readline()
+                picked_bytes = base64.b64decode(picked_data)
+                post_data = pickle.loads(picked_bytes)
+                current_freq_dist = add_data_to_freq_dict(current_freq_dist, post_data, n=3)
+                iter_num += 1
+                if iter_num % 100000 == 0:
+                    print(f'{dump_name} - Current n-gram size:', len(current_freq_dist))
+
+        # at the end of each file, we free up some memory by deleting rare n-grams
+        current_freq_dist = delete_rare_ngrams(2, current_freq_dist)
 
     print('All done!')
     return current_freq_dist
 
-def delete_rare_ngrams(current_freq_dist: Counter):
-    filtered_counter = Counter({key: value for key, value in current_freq_dist.items() if value >= 3})
-    return filtered_counter
 
 def main():
     log.info("Starting...")
+    sample_month_years = [
+        ("01", 2011), ("02", 2011), ("03", 2011), ("04", 2011), ("05", 2011), ("06", 2011),
+        ("07", 2011), ("08", 2011),
+        ("09", 2011), ("10", 2011), ("11", 2011), ("12", 2011), ("01", 2012), ("02", 2012),
+        ("03", 2012), ("04", 2012),
+        ("05", 2012), ("06", 2012)
+    ]
+    target_files = [f"{reddit_data_dir}RC_{sample_month_year[1]}-{sample_month_year[0]}.zst" for sample_month_year in
+                    sample_month_years]
 
-    sample_month_years = [("01", 2011), ("02", 2011), ("03", 2011), ("04", 2011), ("05", 2011), ("06", 2011),
-                          ("07", 2011), ("08", 2011),
-                          ("09", 2011), ("10", 2011), ("11", 2011), ("12", 2011), ("01", 2012), ("02", 2012),
-                          ("03", 2012), ("04", 2012),
-                          ("05", 2012), ("06", 2012)]
-    base_path = "/projectnb/cs505ws/projects/NextType/raw_reddit_data"
-    target_files = [f"{base_path}/RC_{sample_month_year[1]}-{sample_month_year[0]}.zst" for sample_month_year in
-                   sample_month_years]
-
-    #print('Preprocessing...')
-    #preprocess_files(target_files)
+    print('Preprocessing...')
+    preprocess_files(target_files)
     print('Post processing...')
     current_freq_dist = process_files(target_files)
-    #reddit_ngram_prob_dict = create_ngram_distribution(current_freq_dist)
-    current_freq_dist = delete_rare_ngrams(current_freq_dist)
-    dump_var_gz("reddit_ngram_prob_dict", current_freq_dist)
+    current_freq_dist = load_var_gz("reddit_ngram_prob_dict")
+    current_freq_dist = delete_rare_ngrams(11, current_freq_dist)
+    print("Final n-gram size is:", len(current_freq_dist))
+    dump_var_gz("reddit_ngram_prob_dict_2", current_freq_dist)
+
 
 log = logging.getLogger("bot")
 log.setLevel(logging.DEBUG)
