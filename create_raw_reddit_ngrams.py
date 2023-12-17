@@ -80,7 +80,6 @@ def create_ngram_distribution(current_freq_dist):
 
 
 def preprocess_file(file_path):
-
     def tokenize_post(pre_tokenized_post_data):
         return [word for sent in nltk.sent_tokenize(pre_tokenized_post_data) for word in nltk.word_tokenize(sent)]
 
@@ -127,6 +126,7 @@ def preprocess_file(file_path):
 
     return file_path
 
+
 def preprocess_files(file_paths: List):
     """
     Preprocesses the raw reddit data into normalized tokens that can easily be converted into ngrams
@@ -147,23 +147,15 @@ def preprocess_files(file_paths: List):
                 print(e)
 
 
-
 def delete_rare_ngrams(rarity, current_freq_dist):
-        print(f'Filtering ngrams - current size={len(current_freq_dist)}')
-        # filter to only include n-grams that appeared at least 2 times
-        filtered_counter = Counter({key: value for key, value in current_freq_dist.items() if value >= rarity})
-        print(f'Filtering ngrams - new size={len(filtered_counter)}')
-        return filtered_counter
-        
+    print(f'Filtering ngrams - current size={len(current_freq_dist)}')
+    # filter to only include n-grams that appeared at least 2 times
+    filtered_counter = Counter({key: value for key, value in current_freq_dist.items() if value >= rarity})
+    print(f'Filtering ngrams - new size={len(filtered_counter)}')
+    return filtered_counter
 
-def process_files(file_paths: List):
-    """
-    :param file_paths:
-    :param author_to_lines: key: str representing author name
-                            value: tuple with the epoch integer timestamp of the msg (utc) and str msg
-    :return:
-    """
 
+def process_files(file_paths: List, n_size: int, del_amnt: int):
     current_freq_dist = Counter()
 
     for file_path in file_paths:
@@ -184,13 +176,13 @@ def process_files(file_paths: List):
                 picked_data = f.readline()
                 picked_bytes = base64.b64decode(picked_data)
                 post_data = pickle.loads(picked_bytes)
-                current_freq_dist = add_data_to_freq_dict(current_freq_dist, post_data, n=3)
+                current_freq_dist = add_data_to_freq_dict(current_freq_dist, post_data, n=n_size)
                 iter_num += 1
                 if iter_num % 100000 == 0:
                     print(f'{dump_name} - Current n-gram size:', len(current_freq_dist))
 
         # at the end of each file, we free up some memory by deleting rare n-grams
-        current_freq_dist = delete_rare_ngrams(2, current_freq_dist)
+        current_freq_dist = delete_rare_ngrams(del_amnt, current_freq_dist)
 
     print('All done!')
     return current_freq_dist
@@ -208,14 +200,23 @@ def main():
     target_files = [f"{reddit_data_dir}RC_{sample_month_year[1]}-{sample_month_year[0]}.zst" for sample_month_year in
                     sample_month_years]
 
+    # first pre-processing the data to normalize raw reddit data
+    # and then tokenize it - this part can be done in parallel
     print('Preprocessing...')
-    preprocess_files(target_files)
-    print('Post processing...')
-    current_freq_dist = process_files(target_files)
-    current_freq_dist = load_var_gz("reddit_ngram_prob_dict")
-    current_freq_dist = delete_rare_ngrams(11, current_freq_dist)
-    print("Final n-gram size is:", len(current_freq_dist))
-    dump_var_gz("reddit_ngram_prob_dict_2", current_freq_dist)
+    #preprocess_files(target_files)  # no need to return anything, this data is dumped to a file since its too large to
+                                    # fit into memory
+    # then process 2-grams
+    print('Processing 2-grams')
+    current_freq_dist = process_files(target_files, 2, 5)
+    current_freq_dist = delete_rare_ngrams(25, current_freq_dist)
+    print("Final 2-gram size is:", len(current_freq_dist))
+    dump_var_gz("reddit_ngram_prob_dict_2_gram", current_freq_dist)
+    # next processes 3-grams
+    print('Processing 3-grams')
+    current_freq_dist = process_files(target_files, 3, 3) # 3,3 orginal
+    current_freq_dist = delete_rare_ngrams(16, current_freq_dist) # 11 orginal
+    print("Final 3-gram size is:", len(current_freq_dist))
+    dump_var_gz("reddit_ngram_prob_dict_3_gram", current_freq_dist)
 
 
 log = logging.getLogger("bot")
