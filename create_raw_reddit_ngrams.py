@@ -7,10 +7,10 @@ import multiprocessing
 import os
 import pickle
 import re
-from collections import Counter
+from collections import Counter, defaultdict
 from concurrent.futures import Future, as_completed
 from datetime import datetime
-from typing import List
+from typing import List, Dict, Tuple
 
 import nltk
 from nltk import ngrams
@@ -188,6 +188,68 @@ def process_files(file_paths: List, n_size: int, del_amnt: int):
     return current_freq_dist
 
 
+def pmf_from_3_grams(reddit_3_grams: Counter) -> Dict[Tuple[str, str], Dict[str, float]]:
+    from_2_gram_to_word_counter: Dict[Tuple[str, str], Counter[str]] = defaultdict(lambda: Counter())
+    # first convert loaded data into a dict [2-tuple] -> possible words and counter
+    for reddit_3_gram in tqdm(reddit_3_grams):
+        lookup = tuple(reddit_3_gram[:2])
+        result_word = reddit_3_gram[2]
+
+        possible_next_words_counter = from_2_gram_to_word_counter[lookup]
+        possible_next_words_counter[result_word] += 1
+
+    # delete all result words less common than top 5
+    for a_2_gram in tqdm(from_2_gram_to_word_counter):
+        possible_next_words_counter = from_2_gram_to_word_counter[a_2_gram]
+        most_common_tuples = possible_next_words_counter.most_common(5)
+        most_common_elems_counter = Counter()
+        for element in most_common_tuples:
+            most_common_elems_counter[element[0]] = element[1]
+
+    from_2_gram_to_word_probability: Dict[Tuple[str, str], Dict[str, float]] = defaultdict(
+        lambda: defaultdict(float))
+
+    # then convert the counter into a probability distribution
+    for a_2_gram in tqdm(from_2_gram_to_word_counter):
+        possible_next_words_counter = from_2_gram_to_word_probability[a_2_gram]
+        total_count = sum(possible_next_words_counter.values())
+        probability_distribution = {key: count / total_count for key, count in possible_next_words_counter.items()}
+        from_2_gram_to_word_probability[a_2_gram] = probability_distribution
+
+    return from_2_gram_to_word_probability
+
+
+def pmf_from_2_grams(reddit_2_grams: Counter) -> Dict[Tuple[str, str], Dict[str, float]]:
+    from_1_gram_to_word_counter: Dict[Tuple[str, str], Counter[str]] = defaultdict(lambda: Counter())
+    # first convert loaded data into a dict [1-tuple] -> possible words and counter
+    for reddit_2_gram in tqdm(reddit_2_grams):
+        lookup = tuple(reddit_2_gram[:1])
+        result_word = reddit_2_gram[1]
+
+        possible_next_words_counter = from_1_gram_to_word_counter[lookup]
+        possible_next_words_counter[result_word] += 1
+
+    # delete all result words less common than top 5
+    for a_1_gram in tqdm(from_1_gram_to_word_counter):
+        possible_next_words_counter = from_1_gram_to_word_counter[a_1_gram]
+        most_common_tuples = possible_next_words_counter.most_common(5)
+        most_common_elems_counter = Counter()
+        for element in most_common_tuples:
+            most_common_elems_counter[element[0]] = element[1]
+
+    from_1_gram_to_word_probability: Dict[Tuple[str, str], Dict[str, float]] = defaultdict(
+        lambda: defaultdict(float))
+
+    # then convert the counter into a probability distribution
+    for a_1_gram in tqdm(from_1_gram_to_word_counter):
+        possible_next_words_counter = from_1_gram_to_word_probability[a_1_gram]
+        total_count = sum(possible_next_words_counter.values())
+        probability_distribution = {key: count / total_count for key, count in possible_next_words_counter.items()}
+        from_1_gram_to_word_probability[a_1_gram] = probability_distribution
+
+    return from_1_gram_to_word_probability
+
+
 def main():
     log.info("Starting...")
     sample_month_years = [
@@ -203,20 +265,31 @@ def main():
     # first pre-processing the data to normalize raw reddit data
     # and then tokenize it - this part can be done in parallel
     print('Preprocessing...')
-    #preprocess_files(target_files)  # no need to return anything, this data is dumped to a file since its too large to
-                                    # fit into memory
+    # preprocess_files(target_files)  # no need to return anything, this data is dumped to a file since its too large to
+    # fit into memory
+
     # then process 2-grams
     print('Processing 2-grams')
-    current_freq_dist = process_files(target_files, 2, 5)
-    current_freq_dist = delete_rare_ngrams(25, current_freq_dist)
-    print("Final 2-gram size is:", len(current_freq_dist))
-    dump_var_gz("reddit_ngram_prob_dict_2_gram", current_freq_dist)
+    reddit_2_grams = process_files(target_files, 2, 5)
+    reddit_2_grams = delete_rare_ngrams(25, reddit_2_grams)
+    print("Final 2-gram size is:", len(reddit_2_grams))
+    dump_var_gz("reddit_2_gram", reddit_2_grams)
+
     # next processes 3-grams
     print('Processing 3-grams')
-    current_freq_dist = process_files(target_files, 3, 3) # 3,3 orginal
-    current_freq_dist = delete_rare_ngrams(16, current_freq_dist) # 11 orginal
-    print("Final 3-gram size is:", len(current_freq_dist))
-    dump_var_gz("reddit_ngram_prob_dict_3_gram", current_freq_dist)
+    reddit_3_grams = process_files(target_files, 3, 3)  # 3,3 orginal
+    reddit_3_grams = delete_rare_ngrams(16, reddit_3_grams)  # 11 orginal
+    print("Final 3-gram size is:", len(reddit_3_grams))
+    dump_var_gz("reddit_3_gram", reddit_3_grams)
+
+    # final post-processing to convert everything into a pmf
+    print('Post-Processing 2-grams')
+    reddit_2_grams_pmf = pmf_from_2_grams(reddit_2_grams)
+    dump_var_gz("reddit_2_gram_pmf", dict(reddit_2_grams_pmf))  # need to convert into a regular dict to dump
+
+    print('Post-Processing 3-grams')
+    reddit_3_grams_pmf = pmf_from_3_grams(reddit_3_grams)
+    dump_var_gz("reddit_3_grams_pmf", dict(reddit_3_grams_pmf))  # need to convert into a regular dict to dump
 
 
 log = logging.getLogger("bot")
