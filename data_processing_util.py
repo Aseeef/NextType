@@ -18,6 +18,7 @@ def dump_var_gz(var_name: str, obj) -> None:
 
 def load_var_gz(var_name: str) -> Union[None, object]:
     if not does_var_exists_gz(var_name):
+        print(f"Error: The file {data_dir}/data/{var_name}.pkl.gz does not exist!")
         return None
 
     file_path = F'{data_dir}/data/{var_name}.pkl.gz'  # Updated file extension
