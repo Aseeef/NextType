@@ -196,7 +196,7 @@ def pmf_from_3_grams(reddit_3_grams: Counter) -> Dict[Tuple[str, str], Dict[str,
         result_word = reddit_3_gram[2]
 
         possible_next_words_counter = from_2_gram_to_word_counter[lookup]
-        possible_next_words_counter[result_word] += 1
+        possible_next_words_counter[result_word] += reddit_3_grams[reddit_3_gram]
 
     # delete all result words less common than top 5
     for a_2_gram in tqdm(from_2_gram_to_word_counter):
@@ -205,13 +205,14 @@ def pmf_from_3_grams(reddit_3_grams: Counter) -> Dict[Tuple[str, str], Dict[str,
         most_common_elems_counter = Counter()
         for element in most_common_tuples:
             most_common_elems_counter[element[0]] = element[1]
+        from_2_gram_to_word_counter[a_2_gram] = most_common_elems_counter
 
     from_2_gram_to_word_probability: Dict[Tuple[str, str], Dict[str, float]] = defaultdict(
         lambda: defaultdict(float))
 
     # then convert the counter into a probability distribution
     for a_2_gram in tqdm(from_2_gram_to_word_counter):
-        possible_next_words_counter = from_2_gram_to_word_probability[a_2_gram]
+        possible_next_words_counter = from_2_gram_to_word_counter[a_2_gram]
         total_count = sum(possible_next_words_counter.values())
         probability_distribution = {key: count / total_count for key, count in possible_next_words_counter.items()}
         from_2_gram_to_word_probability[a_2_gram] = probability_distribution
@@ -219,15 +220,15 @@ def pmf_from_3_grams(reddit_3_grams: Counter) -> Dict[Tuple[str, str], Dict[str,
     return from_2_gram_to_word_probability
 
 
-def pmf_from_2_grams(reddit_2_grams: Counter) -> Dict[Tuple[str, str], Dict[str, float]]:
-    from_1_gram_to_word_counter: Dict[Tuple[str, str], Counter[str]] = defaultdict(lambda: Counter())
+def pmf_from_2_grams(reddit_2_grams: Counter) -> Dict[Tuple[str], Dict[str, float]]:
+    from_1_gram_to_word_counter: Dict[Tuple[str], Counter[str]] = defaultdict(lambda: Counter())
     # first convert loaded data into a dict [1-tuple] -> possible words and counter
     for reddit_2_gram in tqdm(reddit_2_grams):
         lookup = tuple(reddit_2_gram[:1])
         result_word = reddit_2_gram[1]
 
         possible_next_words_counter = from_1_gram_to_word_counter[lookup]
-        possible_next_words_counter[result_word] += 1
+        possible_next_words_counter[result_word] += reddit_2_grams[reddit_2_gram]
 
     # delete all result words less common than top 5
     for a_1_gram in tqdm(from_1_gram_to_word_counter):
@@ -236,13 +237,14 @@ def pmf_from_2_grams(reddit_2_grams: Counter) -> Dict[Tuple[str, str], Dict[str,
         most_common_elems_counter = Counter()
         for element in most_common_tuples:
             most_common_elems_counter[element[0]] = element[1]
+        from_1_gram_to_word_counter[a_1_gram] = most_common_elems_counter
 
-    from_1_gram_to_word_probability: Dict[Tuple[str, str], Dict[str, float]] = defaultdict(
+    from_1_gram_to_word_probability: Dict[Tuple[str], Dict[str, float]] = defaultdict(
         lambda: defaultdict(float))
 
     # then convert the counter into a probability distribution
     for a_1_gram in tqdm(from_1_gram_to_word_counter):
-        possible_next_words_counter = from_1_gram_to_word_probability[a_1_gram]
+        possible_next_words_counter = from_1_gram_to_word_counter[a_1_gram]
         total_count = sum(possible_next_words_counter.values())
         probability_distribution = {key: count / total_count for key, count in possible_next_words_counter.items()}
         from_1_gram_to_word_probability[a_1_gram] = probability_distribution
@@ -285,7 +287,7 @@ def main():
     # final post-processing to convert everything into a pmf
     print('Post-Processing 2-grams')
     reddit_2_grams_pmf = pmf_from_2_grams(reddit_2_grams)
-    dump_var_gz("reddit_2_gram_pmf", dict(reddit_2_grams_pmf))  # need to convert into a regular dict to dump
+    dump_var_gz("reddit_2_grams_pmf", dict(reddit_2_grams_pmf))  # need to convert into a regular dict to dump
 
     print('Post-Processing 3-grams')
     reddit_3_grams_pmf = pmf_from_3_grams(reddit_3_grams)
