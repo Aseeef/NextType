@@ -267,7 +267,7 @@ def main():
     # first pre-processing the data to normalize raw reddit data
     # and then tokenize it - this part can be done in parallel
     print('Preprocessing...')
-    # preprocess_files(target_files)  # no need to return anything, this data is dumped to a file since its too large to
+    preprocess_files(target_files)  # no need to return anything, this data is dumped to a file since its too large to
     # fit into memory
 
     # then process 2-grams
